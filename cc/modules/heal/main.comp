@@ -1,0 +1,64 @@
+#version 460
+#extension GL_GOOGLE_include_directive    : enable
+#extension GL_EXT_nonuniform_qualifier    : enable
+#include "shared.glsl"
+// Spots that cover a target circle with a source circle, as Lightroom's spot removal does. Cloning
+// copies the source as it is. Healing also adds the difference between the two circles' rims,
+// spread inwards by inverse distance weighting, which approximates the membrane that Poisson
+// image editing solves for, so the patch takes on its surroundings' colour and brightness.
+layout(local_size_x = DT_LOCAL_SIZE_X, local_size_y = DT_LOCAL_SIZE_Y, local_size_z = 1) in;
+layout(std140, set = 0, binding = 1) uniform params_t
+{
+  int nspots;
+  int pad0, pad1, pad2;
+  // per spot: target x, y and source x, y as fractions of the image, then the radius as a
+  // fraction of the longer side, feather as a fraction of the radius, opacity and mode, where 1
+  // heals and 0 clones
+  vec4 spot[64];
+} params;
+layout(set = 1, binding = 0) uniform sampler2D img_in;
+layout(set = 1, binding = 1) uniform writeonly image2D img_out;
+
+// the points around each rim that healing compares
+#define RIM 24
+
+vec3 at(vec2 p)
+{
+  return texture(img_in, p / vec2(textureSize(img_in, 0))).rgb;
+}
+
+void main()
+{
+  ivec2 ipos = ivec2(gl_GlobalInvocationID);
+  if(any(greaterThanEqual(ipos, imageSize(img_out)))) return;
+  const vec2 size = vec2(imageSize(img_out));
+  const vec2 p = ipos + 0.5;
+  vec3 rgb = at(p);
+  for(int i = 0; i < min(params.nspots, 32); i++)
+  {
+    const vec4 a = params.spot[2*i], b = params.spot[2*i+1];
+    const vec2 target = a.xy * size, source = a.zw * size;
+    const float r = max(1.0, b.x * max(size.x, size.y));
+    const vec2 d = p - target;
+    const float dist = length(d);
+    if(dist >= r) continue;
+    vec3 cover = at(source + d);
+    if(b.w > 0.5)
+    {
+      vec3 sum = vec3(0.0);
+      float weights = 0.0;
+      for(int k = 0; k < RIM; k++)
+      {
+        const float angle = 6.2831853 * k / float(RIM);
+        const vec2 q = r * vec2(cos(angle), sin(angle));
+        const float w = 1.0 / (dot(d - q, d - q) + 1e-2 * r * r);
+        sum += w * (at(target + q) - at(source + q));
+        weights += w;
+      }
+      cover += sum / weights;
+    }
+    const float alpha = (1.0 - smoothstep(r * (1.0 - b.y), r, dist)) * b.z;
+    rgb = mix(rgb, cover, alpha);
+  }
+  imageStore(img_out, ipos, vec4(rgb, 1));
+}

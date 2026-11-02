@@ -1,0 +1,98 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # BSD-3-Clause and others, see LICENSE.txt
+
+# glslang's build_info.py fills the template from the first versioned heading in CHANGES.md.
+genrule(
+    name = "build_info",
+    srcs = [
+        "CHANGES.md",
+        "build_info.h.tmpl",
+    ],
+    outs = ["glslang/build_info.h"],
+    cmd = """
+        v=$$(sed -nE 's/^#* +([0-9]+)\\.([0-9]+)\\.([0-9]+)(-[A-Za-z0-9_]+)? ([0-9]{4}-[0-9]{2}-[0-9]{2})? *$$/\\1 \\2 \\3 \\4/p' \
+            $(location CHANGES.md) | head -n 1)
+        set -- $$v
+        sed -e "s/@major@/$$1/" -e "s/@minor@/$$2/" -e "s/@patch@/$$3/" -e "s/@flavor@/$${4#-}/" \
+            $(location build_info.h.tmpl) > $@
+    """,
+)
+
+# Mirrors gen_extension_headers.py, which needs a Python interpreter we don't otherwise have.
+genrule(
+    name = "intrinsic_header",
+    srcs = ["glslang/ExtensionHeaders/GL_EXT_shader_realtime_clock.glsl"],
+    outs = ["glslang/glsl_intrinsic_header.h"],
+    cmd = """
+        {
+            echo '#pragma once'
+            echo '#ifndef _INTRINSIC_EXTENSION_HEADER_H_'
+            echo '#define _INTRINSIC_EXTENSION_HEADER_H_'
+            echo 'std::string GL_EXT_shader_realtime_clock_GLSL = R"('
+            cat $<
+            echo ')";'
+            echo 'std::string getIntrinsic(const char* const* shaders, int n) {'
+            echo '    std::string shaderString = "";'
+            echo '    for (int i = 0; i < n; i++) {'
+            echo '        if (strstr(shaders[i], "GL_EXT_shader_realtime_clock") != nullptr) {'
+            echo '            shaderString.append(GL_EXT_shader_realtime_clock_GLSL);'
+            echo '        }'
+            echo '    }'
+            echo '    return shaderString;'
+            echo '}'
+            echo '#endif'
+        } > $@
+    """,
+)
+
+# ENABLE_OPT is off because we run spirv-opt as its own step.
+cc_library(
+    name = "glslang",
+    srcs = glob(
+        [
+            "SPIRV/*.cpp",
+            "glslang/GenericCodeGen/*.cpp",
+            "glslang/MachineIndependent/**/*.cpp",
+        ],
+        exclude = ["SPIRV/SpvTools.cpp"],
+    ) + [
+        "glslang/OSDependent/Unix/ossource.cpp",
+        "glslang/ResourceLimits/ResourceLimits.cpp",
+    ],
+    hdrs = glob([
+        "SPIRV/*.h",
+        "SPIRV/*.hpp11",
+        "glslang/HLSL/*.h",
+        "glslang/Include/*.h",
+        "glslang/MachineIndependent/**/*.h",
+        "glslang/OSDependent/*.h",
+        "glslang/Public/*.h",
+    ]) + [
+        ":build_info",
+    ],
+    copts = [
+        "-w",
+    ],
+    defines = [
+        "ENABLE_OPT=0",
+        "ENABLE_SPIRV=1",
+        "GLSLANG_OSINCLUDE_UNIX",
+    ],
+    includes = ["."],
+    linkopts = ["-lpthread"],
+)
+
+cc_binary(
+    name = "glslangValidator",
+    srcs = [
+        "StandAlone/DirStackFileIncluder.h",
+        "StandAlone/StandAlone.cpp",
+        "StandAlone/Worklist.h",
+        ":intrinsic_header",
+    ],
+    copts = ["-w"],
+    deps = [":glslang"],
+)

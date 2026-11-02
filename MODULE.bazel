@@ -1,0 +1,171 @@
+module(
+    name = "vkdt_wasm",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "apple_support", version = "2.11.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+bazel_dep(name = "aspect_rules_esbuild", version = "0.27.1")
+bazel_dep(name = "aspect_rules_js", version = "3.4.1")
+bazel_dep(name = "aspect_rules_ts", version = "3.10.1")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "emsdk", version = "6.0.13")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "pugixml", version = "1.15.bcr.1")
+bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "rules_nodejs", version = "6.7.7")
+bazel_dep(name = "vulkan_headers", version = "1.4.349")
+bazel_dep(name = "rules_rust", version = "0.74.0")
+bazel_dep(name = "spirv_tools", version = "2026.3")
+bazel_dep(name = "zlib", version = "1.3.2.bcr.3")
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(
+    name = "nodejs",
+    node_version = "24.22.1",
+)
+use_repo(node, "nodejs")
+
+# Isolated so that modules depending on this one keep their own npm packages.
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm", isolate = True)
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//:pnpm-lock.yaml",
+)
+use_repo(npm, "npm")
+
+rules_ts_ext = use_extension("@aspect_rules_ts//ts:extensions.bzl", "typescript", isolate = True)
+rules_ts_ext.deps(version_from = "//:package.json")
+use_repo(rules_ts_ext, "npm_typescript")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "rawspeed",
+    build_file = "//third_party/rawspeed:BUILD.rawspeed.bazel",
+    sha256 = "8bc32672c25f05003a92274c071ac084f2770c8721e0e57a7c76aaa5ade5e6ec",
+    strip_prefix = "rawspeed-c48d5a6227a1369b633b86bc6707cb0e11d2150b",
+    urls = ["https://github.com/darktable-org/rawspeed/archive/c48d5a6227a1369b633b86bc6707cb0e11d2150b.tar.gz"],
+)
+
+
+http_archive(
+    name = "vkdt",
+    build_file = "//third_party/vkdt:BUILD.vkdt.bazel",
+    # Makes dt_no_roi pointer sized, since it goes through varargs as a pointer, adapts i-raw to
+    # the rawspeed we build, which is newer than the one it was written against, and drops
+    # colour's log curves, which call into the deleted shared/oetf.glsl.
+    patch_args = ["-p1"],
+    # Deletes vkdt's GPL files so the engine can't build against them. //cc/replacements has
+    # our own versions of the ones it needs.
+    patch_cmds = ["rm -r " + " ".join([
+        "src/core/gaussian_elimination.h",
+        "src/core/sig.h",
+        "src/db/tests/qsort.c",
+        "src/pipe/modules/OpenDRT",
+        "src/pipe/modules/i-jpg/main.c",
+        "src/pipe/modules/i-mlv",
+        "src/pipe/modules/i-raw/exif.h",
+        "src/pipe/modules/o-jpg/main.c",
+        "src/pipe/modules/o-jxl/main.c",
+        "src/pipe/modules/rt/mcpg.comp",
+        "src/pipe/modules/rt/quat.h",
+        "src/pipe/modules/shared/oetf.glsl",
+        "src/qvk",
+    ])],
+    patches = ["//third_party/vkdt:vkdt.patch"],
+    sha256 = "33f6a803925054c6c1174ab08282980b3238e7e696280ab537a930b07b6e978e",
+    strip_prefix = "vkdt-dc23b3c3c182818621e73d49263dfa6f2d4404f0",
+    urls = ["https://github.com/hanatos/vkdt/archive/dc23b3c3c182818621e73d49263dfa6f2d4404f0.tar.gz"],
+)
+
+http_archive(
+    name = "glslang",
+    build_file = "//third_party/glslang:BUILD.glslang.bazel",
+    sha256 = "9c09b901149c729df745057dafa815278aaa101b84d2b6e14f16a42de52f97f2",
+    strip_prefix = "glslang-16.6.0",
+    urls = ["https://github.com/KhronosGroup/glslang/archive/refs/tags/16.6.0.tar.gz"],
+)
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.90.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+# naga-cli is binary-only, so cargo won't take it as a dependency. We build its one source file
+# against these specs, which copy its Cargo.toml. Repin with
+# `CARGO_BAZEL_REPIN=1 bazelisk build @naga_cli//:naga`.
+http_archive(
+    name = "naga_cli",
+    build_file = "//third_party/naga:BUILD.naga_cli.bazel",
+    sha256 = "45283c11b8b1da1936214eefc9caf9c1bc74ae5c090023eaea84ba317a194c8c",
+    strip_prefix = "naga-cli-30.0.1",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/naga-cli/naga-cli-30.0.1.crate"],
+)
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.spec(
+    default_features = False,
+    features = ["std"],
+    package = "anyhow",
+    version = "1.0.87",
+)
+crate.spec(
+    package = "argh",
+    version = "0.1.13",
+)
+crate.spec(
+    features = ["serde"],
+    package = "bincode",
+    version = "2",
+)
+crate.spec(
+    default_features = False,
+    features = [
+        "std",
+        "termcolor",
+    ],
+    package = "codespan-reporting",
+    version = "0.13",
+)
+crate.spec(
+    default_features = False,
+    package = "env_logger",
+    version = "0.11",
+)
+crate.spec(
+    package = "log",
+    version = "0.4.29",
+)
+crate.spec(
+    features = [
+        "wgsl-in",
+        "wgsl-out",
+        "glsl-in",
+        "glsl-out",
+        "spv-in",
+        "spv-out",
+        "msl-out",
+        "hlsl-out",
+        "dot-out",
+        "serialize",
+        "deserialize",
+        "termcolor",
+        "stderr",
+        "fs",
+    ],
+    package = "naga",
+    version = "=30.0.1",
+)
+crate.from_specs(
+    name = "naga_crates",
+    cargo_lockfile = "//third_party/naga:Cargo.lock",
+    lockfile = "//third_party/naga:cargo-bazel-lock.json",
+)
+use_repo(crate, "naga_crates")
+

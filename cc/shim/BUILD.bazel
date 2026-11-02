@@ -1,0 +1,15 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Stand-ins for the platform pieces vkdt expects: OpenMP and dlopen'able modules.
+cc_library(
+    name = "shim",
+    srcs = ["dlfcn_lite.c"],
+    hdrs = [
+        "wasm_vkdt_modules.h",
+        "omp.h",
+        "sys/sendfile.h",
+    ],
+    includes = ["."],
+)

@@ -1,0 +1,43 @@
+package(default_visibility = ["//visibility:public"])
+
+# The licenses of everything in //:dist, in the order licenses.txt lists them. None means the file
+# has its own headings.
+LICENSES = [
+    ("vkdt_wasm", "//:LICENSE"),
+    ("vkdt, https://github.com/hanatos/vkdt", "@vkdt//:LICENCE.bsd2"),
+    (
+        "rawspeed, https://github.com/darktable-org/rawspeed, under the GNU LGPL 2.1 or later",
+        "@rawspeed//:LICENSE",
+    ),
+    (None, ":source"),
+    (None, "notices.txt"),
+    ("zlib, https://zlib.net, which rawspeed uses", "@zlib//:LICENSE"),
+    (
+        "Histogram shaders, in vkdt's curves and mask, from merian (https://github.com/LDAP/merian)",
+        "merian.txt",
+    ),
+    ("Emscripten, https://emscripten.org, whose runtime is in the engine", "emscripten.txt"),
+    ("musl, https://musl.libc.org, the C library Emscripten links into the engine", "musl.txt"),
+]
+
+genrule(
+    name = "source",
+    srcs = ["//:MODULE.bazel"],
+    outs = ["source.txt"],
+    cmd = "$(location source.sh) $(location //:MODULE.bazel) > $@",
+    tools = ["source.sh"],
+)
+
+genrule(
+    name = "licenses",
+    srcs = [f for _, f in LICENSES],
+    outs = ["licenses.txt"],
+    cmd = "(" + " && ".join(
+        ["printf 'This engine is vkdt_wasm, which includes software and data by others.\\n\\n'"] +
+        [
+            ("printf '==== %s ====\\n\\n' && " % title.replace("'", "'\\''") if title else "") +
+            "cat $(location %s) && printf '\\n'" % f
+            for title, f in LICENSES
+        ],
+    ) + ") > $@",
+)

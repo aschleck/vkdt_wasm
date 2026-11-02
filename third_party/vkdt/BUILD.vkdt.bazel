@@ -1,0 +1,117 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # BSD-2-Clause, once MODULE.bazel deletes the GPL files
+
+exports_files(["LICENCE.bsd2"])
+
+exports_files(glob([
+    "src/pipe/modules/*/*.comp",
+    "src/pipe/modules/*.glsl",
+]))
+
+# Headers every module's shaders may #include, resolved through -Isrc/pipe/modules.
+filegroup(
+    name = "common",
+    srcs = glob([
+        "src/pipe/modules/*.glsl",
+        "src/pipe/modules/*.h",
+        "src/pipe/modules/shared/**",
+    ]),
+)
+
+# One filegroup per module directory, holding its shaders and the headers they include. shared/
+# is in :common instead.
+[
+    filegroup(
+        name = module,
+        srcs = glob(["src/pipe/modules/%s/**" % module]),
+    )
+    for module in {
+        f.split("/")[3]: None
+        for f in glob(["src/pipe/modules/*/**"])
+        if f.split("/")[3] != "shared"
+    }
+]
+
+exports_files(glob([
+    "src/pipe/modules/*/connectors",
+    "src/pipe/modules/*/params",
+    "src/pipe/modules/*/params.ui",
+]))
+
+# vkdt's processing core, without its Vulkan device wrapper (src/qvk), which //cc/replacements and
+# //cc/webgpu replace. Modules are compiled through //cc's wrappers, which include their sources
+# from here.
+cc_library(
+    name = "pipe",
+    srcs = [
+        "src/core/log.c",
+        "src/core/threads.c",
+        "src/pipe/alloc.c",
+        "src/pipe/buffer.c",
+        "src/pipe/connector.c",
+        "src/pipe/global.c",
+        "src/pipe/graph.c",
+        "src/pipe/graph-export.c",
+        "src/pipe/graph-io.c",
+        "src/pipe/module.c",
+        "src/pipe/raytrace.c",
+        "src/pipe/res.c",
+    ],
+    hdrs = glob([
+        "src/core/*.h",
+        "src/db/*.h",
+        "src/gui/widget_descriptor.h",
+        "src/pipe/*.h",
+        "src/pipe/*.inc",
+        "src/snd/*.h",
+    ]),
+    copts = [
+        "-std=gnu11",
+        "-D_GNU_SOURCE",
+        "-DVKDT_VERSION=\\\"vkdt_wasm\\\"",
+        "-w",
+    ],
+    includes = [
+        "src",
+        "src/pipe",
+    ],
+    textual_hdrs = glob([
+        "src/pipe/modules/**/*.c",
+        "src/pipe/modules/**/*.cc",
+        "src/pipe/modules/**/*.h",
+        "src/pipe/modules/**/*.glsl",
+    ]),
+    deps = [
+        "@vkdt_wasm//cc/replacements",
+        "@vkdt_wasm//cc/shim",
+        "@vulkan_headers",
+    ],
+)
+
+# Precomputes the table that turns colours into spectra, which filmsim reads as
+# data/spectra-em.lut. vkdt's Makefile runs this at install time, see src/tools/flat.mk.
+cc_binary(
+    name = "mkspectra",
+    srcs = [
+        "src/core/threads.c",
+        "src/tools/spec/mkspectra.c",
+    ] + glob([
+        "src/core/*.h",
+        "src/tools/**/*.h",
+    ]),
+    copts = [
+        "-O3",
+        "-D_GNU_SOURCE",
+        "-w",
+    ],
+    includes = [
+        "src",
+        "src/tools",
+    ],
+    linkopts = ["-lm", "-lpthread"],
+)
+
+exports_files(["src/filmsim.lut.xz"])

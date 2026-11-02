@@ -1,0 +1,3 @@
+nspots:int:1:0
+pad:int:3:0
+spots:float:256:0

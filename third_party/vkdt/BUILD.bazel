@@ -1,0 +1,29 @@
+load(":modules.bzl", "SHADER_INCLUDES", "VKDT_MODULES")
+load(":shaders.bzl", "vkdt_wgsl")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "glsl_fix.pl",
+    "modules.bzl",
+    "module_wrap.pl",
+    "spv_bindings.pl",
+    "BUILD.vkdt.bazel",
+])
+
+
+[
+    vkdt_wgsl(
+        name = "core_" + module,
+        module = module,
+        shaders = shaders,
+        srcs = ["@vkdt//:" + m for m in SHADER_INCLUDES.get(module, [])],
+    )
+    for module, (_, shaders) in VKDT_MODULES.items()
+    if shaders
+]
+
+filegroup(
+    name = "core_shaders",
+    srcs = [":core_" + module for module, (_, shaders) in VKDT_MODULES.items() if shaders],
+)

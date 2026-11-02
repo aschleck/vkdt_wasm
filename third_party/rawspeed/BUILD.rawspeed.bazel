@@ -1,0 +1,58 @@
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["restricted"])  # LGPL-2.1-or-later
+
+exports_files([
+    "LICENSE",
+    "data/cameras.xml",
+])
+
+# Mirrors the configure_file call in src/CMakeLists.txt. The page sizes only feed alignment
+# assertions and allocator alignment, so we use wasm32's conventional 4 KiB rather than its 64 KiB
+# memory page to avoid wasting memory on every aligned allocation.
+expand_template(
+    name = "rawspeedconfig",
+    out = "generated/rawspeedconfig.h",
+    substitutions = {
+        "${RAWSPEED_CACHELINESIZE}": "64",
+        "${RAWSPEED_PAGESIZE}": "4096",
+        "${RAWSPEED_LARGEPAGESIZE}": "4096",
+        "#cmakedefine HAVE_PUGIXML": "#define HAVE_PUGIXML",
+        "#cmakedefine HAVE_OPENMP": "/* #undef HAVE_OPENMP */",
+        "#cmakedefine HAVE_ZLIB": "#define HAVE_ZLIB",
+        "#cmakedefine HAVE_JPEG_MEM_SRC": "/* #undef HAVE_JPEG_MEM_SRC */",
+        "#cmakedefine HAVE_JPEG": "/* #undef HAVE_JPEG */",
+        "#cmakedefine HAVE_CXX_THREAD_LOCAL": "#define HAVE_CXX_THREAD_LOCAL",
+        "#cmakedefine HAVE_GCC_THREAD_LOCAL": "/* #undef HAVE_GCC_THREAD_LOCAL */",
+        "#cmakedefine RAWSPEED_STANDALONE_BUILD": "/* #undef RAWSPEED_STANDALONE_BUILD */",
+        "#cmakedefine WITH_SSE2": "/* #undef WITH_SSE2 */",
+    },
+    template = "src/config.h.in",
+)
+
+cc_library(
+    name = "rawspeed",
+    srcs = glob(["src/librawspeed/**/*.cpp"]),
+    hdrs = glob([
+        "src/librawspeed/**/*.h",
+        "src/external/**/*.h",
+        "src/external/**/*.inc",
+    ]) + [":rawspeedconfig"],
+    copts = [
+        "-std=c++20",
+        "-Wno-everything",
+    ],
+    features = ["wasm_exceptions"],
+    includes = [
+        "generated",
+        "src/external",
+        "src/librawspeed",
+    ],
+    deps = [
+        "@pugixml",
+        "@zlib",
+    ],
+)

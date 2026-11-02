@@ -1,0 +1,25 @@
+build --cxxopt='-std=c++17'
+build --host_cxxopt='-std=c++17'
+
+# Bazel finds no Xcode version under the nix shell and leaves the deployment target unset, which
+# marks std::filesystem unavailable to glslang.
+build --macos_minimum_os=10.15
+build --host_macos_minimum_os=10.15
+
+# Reduce cache invalidations by passing fewer environment variables
+build --incompatible_strict_action_env
+
+test --test_output=errors
+
+# Required by aspect_rules_ts
+common --@aspect_rules_ts//ts:skipLibCheck=honor_tsconfig
+
+# For corgi
+common --experimental_isolated_extension_usages
+
+# rawspeed and pugixml throw, and only the emscripten toolchain defines this feature so native
+# builds ignore it
+build --features=wasm_exceptions
+
+# The wasm decoder is several times slower at -O0
+build --compilation_mode=opt

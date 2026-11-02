@@ -1,0 +1,42 @@
+load("@aspect_rules_esbuild//esbuild:defs.bzl", "esbuild")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+package(default_visibility = ["//visibility:public"])
+
+# The worker's messages and the helpers a page shares with it.
+ts_project(
+    name = "js",
+    srcs = [
+        "brush.ts",
+        "orientation.ts",
+        "protocol.ts",
+        "waveform.ts",
+    ],
+    allow_js = True,
+    assets = ["//:package_json"],
+    composite = True,
+    transpiler = "tsc",
+    tsconfig = "//:tsconfig",
+)
+
+ts_project(
+    name = "worker_ts",
+    srcs = ["engine_worker.ts"],
+    allow_js = True,
+    assets = ["//:package_json"],
+    composite = True,
+    transpiler = "tsc",
+    tsconfig = "//:tsconfig",
+    deps = [":js"],
+)
+
+esbuild(
+    name = "worker",
+    srcs = [":worker_ts"],
+    entry_point = "engine_worker.ts",
+    format = "esm",
+    output = "bundle/engine_worker.js",
+    platform = "browser",
+    target = "es2022",
+    tsconfig = "//:tsconfig",
+)

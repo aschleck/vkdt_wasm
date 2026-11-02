@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # MIT OR Apache-2.0
+
+rust_binary(
+    name = "naga",
+    srcs = ["src/bin/naga.rs"],
+    edition = "2021",
+    deps = [
+        "@naga_crates//:anyhow",
+        "@naga_crates//:argh",
+        "@naga_crates//:bincode",
+        "@naga_crates//:codespan-reporting",
+        "@naga_crates//:env_logger",
+        "@naga_crates//:log",
+        "@naga_crates//:naga",
+    ],
+)

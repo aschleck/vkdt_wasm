@@ -1,0 +1,14 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Our own versions of vkdt headers that MODULE.bazel deletes because they're GPL, at the paths vkdt
+# includes them by.
+cc_library(
+    name = "replacements",
+    hdrs = [
+        "core/gaussian_elimination.h",
+        "qvk/qvk.h",
+    ],
+    includes = ["."],
+)

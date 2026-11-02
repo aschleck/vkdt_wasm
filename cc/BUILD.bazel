@@ -1,0 +1,206 @@
+load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("//third_party/vkdt:modules.bzl", "VKDT_MODULES", "VKDT_NO_PARAMS")
+load("//third_party/vkdt:shaders.bzl", "vkdt_wgsl")
+
+package(default_visibility = ["//visibility:public"])
+
+# vkdt modules with callbacks, by the source file that holds them
+CODE = {m: src for m, (src, _) in VKDT_MODULES.items() if src}
+
+# Directories vkdt loads as modules, which have connectors and mostly params. mipmap and shared
+# only hold shaders.
+WITH_CONNECTORS = [m for m in VKDT_MODULES if m not in ("mipmap", "shared")]
+WITH_PARAMS = [m for m in WITH_CONNECTORS if m not in VKDT_NO_PARAMS]
+
+# Our own modules in modules/, like VKDT_MODULES: the source file that holds their callbacks, if
+# any, and their shaders.
+LOCAL = {
+    "heal": (None, ["main"]),
+    "i-brush": ("main.c", []),
+    "o-wasm": ("main.c", []),
+}
+
+LOCAL_MODULES = {m: src for m, (src, _) in LOCAL.items() if src}
+
+[
+    vkdt_wgsl(
+        name = "local_" + m,
+        module = m,
+        shaders = shaders,
+        srcdir = "modules/" + m,
+    )
+    for m, (_, shaders) in LOCAL.items()
+    if shaders
+]
+
+[genrule(
+    name = "wrapped_" + m.replace("-", "_"),
+    srcs = ["@vkdt//:src/pipe/modules/%s/%s" % (m, src)],
+    outs = ["wrapped/%s.%s" % (m.replace("-", "_"), "cc" if src.endswith(".cc") else "c")],
+    cmd = "perl $(location //third_party/vkdt:module_wrap.pl) %s modules/%s/%s $< $@" % (m, m, src),
+    tools = ["//third_party/vkdt:module_wrap.pl"],
+) for m, src in CODE.items()]
+
+[genrule(
+    name = "wrapped_" + m.replace("-", "_"),
+    srcs = ["modules/%s/%s" % (m, src)],
+    outs = ["wrapped/%s.c" % m.replace("-", "_")],
+    cmd = "perl $(location //third_party/vkdt:module_wrap.pl) %s cc/modules/%s/%s $< $@" % (m, m, src),
+    tools = ["//third_party/vkdt:module_wrap.pl"],
+) for m, src in LOCAL_MODULES.items()]
+
+genrule(
+    name = "module_registry",
+    outs = ["wrapped/registry.c"],
+    cmd = "(" + " && ".join(
+        ["echo '#include \"wasm_vkdt_modules.h\"'"] +
+        ["echo 'const wasm_vkdt_symbol_t *wasm_vkdt_symbols_%s(void);'" % m.replace("-", "_") for m in sorted(list(CODE.keys()) + list(LOCAL_MODULES.keys()))] +
+        ["echo 'const wasm_vkdt_module_t wasm_vkdt_modules[] = {'"] +
+        ["echo '  {\"%s\", wasm_vkdt_symbols_%s},'" % (m, m.replace("-", "_")) for m in sorted(list(CODE.keys()) + list(LOCAL_MODULES.keys()))] +
+        ["echo '  {0, 0},'", "echo '};'"],
+    ) + ") > $@",
+)
+
+VKDT_COPTS = [
+    "-D_GNU_SOURCE",
+    "-w",
+]
+
+cc_library(
+    name = "modules",
+    srcs = [":wrapped_" + m.replace("-", "_") for m in CODE if not CODE[m].endswith(".cc")] +
+           [":wrapped_" + m.replace("-", "_") for m in LOCAL_MODULES] + [":module_registry"],
+    copts = ["-std=gnu11"] + VKDT_COPTS,
+    textual_hdrs = glob(["modules/**/*.c"]),
+    deps = [
+        ":modules_cc",
+        "@vkdt//:pipe",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "modules_cc",
+    srcs = [":wrapped_" + m.replace("-", "_") for m in CODE if CODE[m].endswith(".cc")],
+    copts = ["-std=c++20"] + VKDT_COPTS,
+    deps = [
+        "@rawspeed",
+        "@vkdt//:pipe",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "noise",
+    srcs = ["noise.cc"],
+    copts = ["-std=c++20"],
+    deps = ["@rawspeed"],
+)
+
+cc_library(
+    name = "webgpu",
+    srcs = [
+        "webgpu/qvk_webgpu.c",
+        "webgpu/vulkan_webgpu.c",
+    ],
+    hdrs = ["webgpu/vulkan_webgpu.h"],
+    additional_linker_inputs = ["webgpu/library_wvk.js"],
+    copts = ["-std=gnu11"] + VKDT_COPTS,
+    includes = ["webgpu"],
+    linkopts = ["--js-library $(location webgpu/library_wvk.js)"],
+    deps = ["@vkdt//:pipe"],
+    alwayslink = True,
+)
+
+# The files vkdt reads at runtime, laid out as it expects under its base directory. Shaders keep
+# vkdt's .comp.spv names but hold WGSL, see vkCreateShaderModule in webgpu/vulkan_webgpu.c.
+FS_FILES = (
+    ["modules/%s/lib%s.so" % (m, m) for m in list(CODE.keys()) + list(LOCAL_MODULES.keys())] +
+    ["modules/%s/connectors" % m for m in WITH_CONNECTORS] +
+    ["modules/%s/%s" % (m, f) for m in WITH_PARAMS for f in ["params", "params.ui"]] +
+    ["modules/%s/%s" % (m, f) for m in LOCAL for f in ["connectors", "params"]] +
+    ["modules/%s/%s.comp.spv" % (m, s) for m, (_, shaders) in VKDT_MODULES.items() + LOCAL.items() for s in shaders] +
+    ["data/cameras.xml", "data/filmsim.lut", "data/spectra-em.lut"]
+)
+
+# filmsim's tables, which vkdt's Makefile unpacks and computes at install time
+genrule(
+    name = "filmsim_lut",
+    srcs = ["@vkdt//:src/filmsim.lut.xz"],
+    outs = ["data/filmsim.lut"],
+    cmd = "tar xJf $< -C $(@D) filmsim.lut",
+)
+
+genrule(
+    name = "spectra_em_lut",
+    outs = ["data/spectra-em.lut"],
+    # mkspectra writes to the working directory
+    cmd = "out=$$PWD/$@ && cd $(@D) && $$OLDPWD/$(execpath @vkdt//:mkspectra) > /dev/null && mv spectra-em.lut $$out",
+    tools = ["@vkdt//:mkspectra"],
+)
+
+genrule(
+    name = "fs",
+    srcs = (
+        ["@vkdt//:src/pipe/modules/%s/connectors" % m for m in WITH_CONNECTORS] +
+        ["@vkdt//:src/pipe/modules/%s/%s" % (m, f) for m in WITH_PARAMS for f in ["params", "params.ui"]] +
+        ["//third_party/vkdt:core_%s_%s_%s" % (m, m, s) for m, (_, shaders) in VKDT_MODULES.items() for s in shaders] +
+        ["modules/%s/%s" % (m, f) for m in LOCAL for f in ["connectors", "params"]] +
+        [":local_%s_%s_%s" % (m, m, s) for m, (_, shaders) in LOCAL.items() for s in shaders] +
+        ["@rawspeed//:data/cameras.xml", ":filmsim_lut", ":spectra_em_lut"]
+    ),
+    outs = ["fs/" + f for f in FS_FILES],
+    cmd = " && ".join(
+        ["touch $(RULEDIR)/fs/modules/%s/lib%s.so" % (m, m) for m in list(CODE.keys()) + list(LOCAL_MODULES.keys())] +
+        ["cp $(location @vkdt//:src/pipe/modules/%s/connectors) $(RULEDIR)/fs/modules/%s/connectors" % (m, m) for m in WITH_CONNECTORS] +
+        ["cp $(location @vkdt//:src/pipe/modules/%s/%s) $(RULEDIR)/fs/modules/%s/%s" % (m, f, m, f) for m in WITH_PARAMS for f in ["params", "params.ui"]] +
+        ["cp $(location //third_party/vkdt:core_%s_%s_%s) $(RULEDIR)/fs/modules/%s/%s.comp.spv" % (m, m, s, m, s) for m, (_, shaders) in VKDT_MODULES.items() for s in shaders] +
+        ["cp $(location modules/%s/%s) $(RULEDIR)/fs/modules/%s/%s" % (m, f, m, f) for m in LOCAL for f in ["connectors", "params"]] +
+        ["cp $(location :local_%s_%s_%s) $(RULEDIR)/fs/modules/%s/%s.comp.spv" % (m, m, s, m, s) for m, (_, shaders) in LOCAL.items() for s in shaders] +
+        ["cp $(location @rawspeed//:data/cameras.xml) $(RULEDIR)/fs/data/cameras.xml"] +
+        ["cp $(location :%s) $(RULEDIR)/fs/data/%s" % (rule, lut) for rule, lut in [("filmsim_lut", "filmsim.lut"), ("spectra_em_lut", "spectra-em.lut")]],
+    ),
+)
+
+cc_binary(
+    name = "engine_cc",
+    srcs = ["engine.c"],
+    additional_linker_inputs = [":fs/" + f for f in FS_FILES],
+    copts = ["-std=gnu11"] + VKDT_COPTS,
+    linkopts = [
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sENVIRONMENT=web,worker",
+        "-sERROR_ON_UNDEFINED_SYMBOLS=1",
+        "-sEXPORT_ES6=1",
+        "-sEXPORT_NAME=createEngine",
+        "-sEXPORTED_FUNCTIONS=_malloc,_free",
+        "-sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,UTF8ToString,stringToNewUTF8",
+        "-sJSPI=1",
+        "-sJSPI_EXPORTS=wasm_init,wasm_open,wasm_render,wasm_set_params,wasm_spot_white",
+        "-sMAXIMUM_MEMORY=4GB",
+        "-sMODULARIZE=1",
+        "-sSTACK_SIZE=4MB",
+        "-Wl,--error-limit=0",
+        "--profiling-funcs",
+    ] + ["--embed-file $(location :fs/%s)@/%s" % (f, f) for f in FS_FILES],
+    deps = [
+        ":modules",
+        ":noise",
+        ":webgpu",
+        "//cc/shim",
+        "@vkdt//:pipe",
+    ],
+)
+
+wasm_cc_binary(
+    name = "engine",
+    cc_target = ":engine_cc",
+    # Only what a page loads. Without outputs, it declares every file Emscripten can emit and writes
+    # empty ones for those it didn't.
+    outputs = [
+        "engine_cc.js",
+        "engine_cc.wasm",
+    ],
+    simd = "simd128",
+)

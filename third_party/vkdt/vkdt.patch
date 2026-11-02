@@ -1,0 +1,87 @@
+diff --git a/src/pipe/modules/api.h b/src/pipe/modules/api.h
+index b82fdca..9ab2b58 100644
+--- a/src/pipe/modules/api.h
++++ b/src/pipe/modules/api.h
+@@ -18,7 +18,7 @@ int bs_init()
+ }
+ #endif
+ 
+-#define dt_no_roi UINT64_C(-1)
++#define dt_no_roi ((uintptr_t)-1)
+ 
+ // some module specific helpers and constants
+ 
+diff --git a/src/pipe/modules/i-raw/main.cc b/src/pipe/modules/i-raw/main.cc
+index 413083b..bf0297c 100644
+--- a/src/pipe/modules/i-raw/main.cc
++++ b/src/pipe/modules/i-raw/main.cc
+@@ -308,7 +308,7 @@ void modify_roi_out(
+   {
+     mod->img_param.black[k]        = bl(k);
+     mod->img_param.white[k]        = mod_data->d->mRaw->whitePoint.value_or((1u << 16)-1);
+-    mod->img_param.whitebalance[k] = mod_data->d->mRaw->metadata.wbCoeffs[k];
++    mod->img_param.whitebalance[k] = mod_data->d->mRaw->metadata.wbCoeffs ? (*mod_data->d->mRaw->metadata.wbCoeffs)[k] : 0.0f;
+   }
+   // normalise wb
+   mod->img_param.whitebalance[0] /= mod->img_param.whitebalance[1];
+diff --git a/src/pipe/modules/i-raw/main.cc b/src/pipe/modules/i-raw/main.cc
+index bf0297c..221746c 100644
+--- a/src/pipe/modules/i-raw/main.cc
++++ b/src/pipe/modules/i-raw/main.cc
+@@ -347,6 +347,11 @@ void modify_roi_out(
+       mod->img_param.cam_to_rec2020[k] = cam_to_rec2020[k];
+   }
+ 
++  // exiv2 reads the exposure time, and without it the exposure param may carry it instead
++  const int pid_exposure = dt_module_get_param(mod->so, dt_token("exposure"));
++  if(pid_exposure >= 0 && dt_module_param_float(mod, pid_exposure)[0] > 0.0f)
++    mod->img_param.exposure = dt_module_param_float(mod, pid_exposure)[0];
++
+   // uncrop bayer sensor filter
+   mod->img_param.filters = mod_data->d->mRaw->cfa.getDcrawFilter();
+   if(mod_data->d->mRaw->getCpp() == 3)
+diff --git a/src/pipe/modules/i-raw/params b/src/pipe/modules/i-raw/params
+index 6625a58..ca213d6 100644
+--- a/src/pipe/modules/i-raw/params
++++ b/src/pipe/modules/i-raw/params
+@@ -2,3 +2,4 @@ filename:string:256:test.cr2
+ noise a:float:1:0.0
+ noise b:float:1:0.0
+ startid:int:1:0
++exposure:float:1:0
+diff --git a/src/pipe/modules/colour/main-impl.glsl b/src/pipe/modules/colour/main-impl.glsl
+--- a/src/pipe/modules/colour/main-impl.glsl
++++ b/src/pipe/modules/colour/main-impl.glsl
+@@ -1,7 +1,6 @@
+ #include "shared.glsl"
+ #include "colourspaces.glsl"
+ #include "shared/dtucs.glsl"
+-#include "shared/oetf.glsl"
+ 
+ layout(local_size_x = DT_LOCAL_SIZE_X, local_size_y = DT_LOCAL_SIZE_Y, local_size_z = 1) in;
+ 
+@@ -139,24 +138,6 @@
+   }
+   else if(params.trc == 6) // gamma 2.2
+     rgb = pow(max(rgb, vec3(0.0)), vec3(2.2)); // happens to be adobe rgb
+-  else if(params.trc == 7) // davinci intermediate
+-    rgb = oetf_davinci_intermediate(rgb);
+-  else if(params.trc == 8) // filmlight t-log
+-    rgb = oetf_filmlight_tlog(rgb);
+-  else if(params.trc == 9) // aces cct
+-    rgb = oetf_acescct(rgb);
+-  else if(params.trc == 10) // arri logC3
+-    rgb = oetf_arri_logc3(rgb);
+-  else if(params.trc == 11) // arri logC4
+-    rgb = oetf_arri_logc4(rgb);
+-  else if(params.trc == 12) // red log3G10
+-    rgb = oetf_red_log3g10(rgb);
+-  else if(params.trc == 13) // panasonic v-log
+-    rgb = oetf_panasonic_vlog(rgb);
+-  else if(params.trc == 14) // sony s-log3
+-    rgb = oetf_sony_slog3(rgb);
+-  else if(params.trc == 15) // fuji f-log2
+-    rgb = oetf_fujifilm_flog2(rgb);
+ 
+ 
+   if(params.primaries == 0)
